@@ -4,8 +4,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include "net.hpp"
 
 constexpr size_t MAX_HEAD = 8192; // the largest request head that we accept
@@ -151,7 +153,14 @@ static int handle_client(socket_t s, const std::string& root, std::string& what)
     send_response(s, 200, "OK", mime_type(path), body, head_only);
     return 200;
 }
-
+static std::mutex g_log_mutex;
+static void serve_client(net::Socket client, std::string root, std::string who) {
+    std::string what;
+    int status = handle_client(client.get(), root, what);
+    net::shutdown_send(client.get());
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    std::cout << who << " " << what << " -> " << status << std::endl;
+}
 int main(int argc, char** argv) {
     const char* port = (argc > 1) ? argv[1] : "8080";
     const std::string root = (argc > 2) ? argv[2] : "www";
@@ -167,10 +176,7 @@ int main(int argc, char** argv) {
                 reinterpret_cast<sockaddr*>(&peer), &peer_len));
             if (!client.valid()) continue;
             std::string who = net::peer_name(reinterpret_cast<sockaddr*>(&peer), peer_len);
-            std::string what;
-            int status = handle_client(client.get(), root, what);
-            net::shutdown_send(client.get()); // tell the browser: no more data
-            std::cout << who << " " << what << " -> " << status << std::endl;
+                     std::thread(serve_client, std::move(client), root, who).detach();
         }
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
